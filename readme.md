@@ -2,7 +2,7 @@
 
 I2C slave controllable device...
 
-CONTROL_WORD = `{write_nRead, addr[6:0]}`
+CONTROL_WORD = `{addr[7:0]}`
 Address map:
 0. General Control
 1. ADC0
