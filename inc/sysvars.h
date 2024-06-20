@@ -77,7 +77,7 @@ enum ctrl_addr_map_e
 */
 
 
-
+#define STOMP_INTR_BPOS 0
 #define POT0_LEFT_ZONE_INTR_BPOS 1
 #define POT1_LEFT_ZONE_INTR_BPOS 2
 #define POT2_LEFT_ZONE_INTR_BPOS 3

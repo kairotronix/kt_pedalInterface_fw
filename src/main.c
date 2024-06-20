@@ -33,7 +33,13 @@ volatile bool readAdcs;
 
 void stomp_callback(uint gpio, uint32_t events)
 {
-    sysvars.interrupt_out = true;
+    //  Always set the interrupt status just in case
+    sysvars.interrupt_status |= (1<<STOMP_INTR_BPOS);
+    //  If the interrupt is enabled, trigger an external interrupt
+    if((sysvars.interrupt_ctrl >> STOMP_INTR_BPOS) & 0x1)
+    {
+        sysvars.interrupt_out = true;
+    }
 }
 
 
