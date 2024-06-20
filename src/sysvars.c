@@ -1,3 +1,3 @@
-#include "inc/sysvars.h"
+#include "../inc/sysvars.h"
 
 volatile sysvars_t sysvars;

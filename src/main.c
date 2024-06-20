@@ -1,17 +1,22 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdlib.h>
 #include <stdbool.h>
 
+
+#include "../inc/sysvars.h"
+#include "../inc/pinassign.h"
+#include "../inc/main.h"
+
 #include "pico/stdlib.h"
-#include "inc/sysvars.h"
-#include "inc/main.h"
-#include "lib/pico_i2c_slave/i2c_slave/include/i2c_slave.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/adc.h"
 #include "hardware/uart.h"
+#include "hardware/gpio.h"
+#include "hardware/i2c.h"
+
+#include "../lib/pico_i2c_slave/i2c_slave/include/i2c_slave.h"
 
 
 
@@ -24,7 +29,15 @@ static struct
 
 volatile bool readAdcs;
 
-repeating_timer_callback_t heartbeat_callback()
+
+
+void stomp_callback(uint gpio, uint32_t events)
+{
+    sysvars.interrupt_out = true;
+}
+
+
+bool heartbeat_callback(repeating_timer_t *rt)
 {
     if(gpio_get(HEARTBEAT_PIN))
         gpio_put(HEARTBEAT_PIN, 0);
@@ -32,7 +45,7 @@ repeating_timer_callback_t heartbeat_callback()
         gpio_put(HEARTBEAT_PIN, 1);
 }
 
-repeating_timer_callback_t adc_read_callback()
+bool adc_read_callback(repeating_timer_t *rt)
 {
     readAdcs = true;
 }
@@ -316,13 +329,16 @@ static void init_gpio(void)
     gpio_set_dir(INTR_OUT_PIN, GPIO_OUT);
 
     gpio_init(SLAVE_SDA_PIN);
-    gpio_init(SLAVE_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SLAVE_SDA_PIN, GPIO_FUNC_I2C);
     //  May not need this on actual board due to presence of pull-up resistor...
     gpio_pull_up(SLAVE_SDA_PIN);
     
     gpio_init(SLAVE_SCL_PIN);
     gpio_set_function(SLAVE_SCL_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(SLAVE_SCL_PIN);
+
+    gpio_set_irq_enabled_with_callback(STOMP_PIN, GPIO_IRQ_EDGE_RISE, true, &stomp_callback);
+
 }
 
 static void hw_init()
