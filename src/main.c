@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include "pico/stdio.h"
 #include <string.h>
 #include <stdbool.h>
 
@@ -8,17 +9,20 @@
 #include "../inc/pinassign.h"
 #include "../inc/main.h"
 
-#include "pico/stdlib.h"
+#include "hardware/regs/addressmap.h"
+//#include "pico/stdlib.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/adc.h"
-#include "hardware/uart.h"
+//#include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
 
 #include "../lib/pico_i2c_slave/i2c_slave/include/i2c_slave.h"
 
-
+//  We just need to store the system control register 
+//  and the interrupt register into flash.. so 32-bits. 
+//  We will use a whole block, however.
 
 static struct
 {
@@ -28,8 +32,52 @@ static struct
 } context;
 
 volatile bool readAdcs;
+volatile bool updateFlash;
+
+#define PROGRAM_DATA_OFFSET (256*1024) // 256k from program memory
+
+const uint8_t *flash_target_base = (const uint8_t *)(XIP_BASE + PROGRAM_DATA_OFFSET);
 
 
+
+int write_config()
+{
+    
+    uint8_t saveData[FLASH_PAGE_SIZE];
+    uint8_t checkData[FLASH_PAGE_SIZE];
+    saveData[0] = (uint8_t) ((sysvars.sys_ctrl >> 8) & 0x00ff);
+    saveData[1] = (uint8_t) (sysvars.sys_ctrl & 0x00ff);
+    saveData[2] = (uint8_t) ((sysvars.interrupt_ctrl >> 8) & 0x00ff);
+    saveData[3] = (uint8_t) (sysvars.interrupt_ctrl & 0x00ff);
+    for(int i = 4; i < FLASH_PAGE_SIZE; i++)
+    {
+        //  fill the rest with F's
+        saveData[i] = 0xff;
+    }
+    //  Disable interrupts during write
+    uint32_t interrupts = save_and_disable_interrupts();
+    //  Erase one full sector after XIP
+    flash_range_erase(PROGRAM_DATA_OFFSET, FLASH_SECTOR_SIZE);
+    //  write the save data
+    flash_range_program(PROGRAM_DATA_OFFSET,saveData,FLASH_PAGE_SIZE);
+    
+    //  restore interrupts
+    restore_interrupts(interrupts);
+    //  Check the data
+    for(int i = 0; i < FLASH_PAGE_SIZE; i++)
+    {
+        if(flash_target_base[i] != saveData[i])
+            return -1;
+    }
+    //  Data all OK
+    return 0;
+}
+
+void read_config()
+{
+    sysvars.sys_ctrl = ((( (uint16_t) flash_target_base[0] << 8) & 0xff00)) | ((( (uint16_t) flash_target_base[1]) & 0x00ff));
+    sysvars.interrupt_ctrl = ((( (uint16_t) flash_target_base[2] << 8) & 0xff00)) | ((( (uint16_t) flash_target_base[3]) & 0x00ff));
+}
 
 void stomp_callback(uint gpio, uint32_t events)
 {
@@ -49,11 +97,13 @@ bool heartbeat_callback(repeating_timer_t *rt)
         gpio_put(HEARTBEAT_PIN, 0);
     else
         gpio_put(HEARTBEAT_PIN, 1);
+    return true;
 }
 
 bool adc_read_callback(repeating_timer_t *rt)
 {
     readAdcs = true;
+    return readAdcs;
 }
 
 static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event)
@@ -83,6 +133,7 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event)
                     {
                         case CTRL_ADDR_GENERAL_CTRL:
                             sysvars.sys_ctrl = buffer;
+                            updateFlash = true;
                             break;
                         //  Begin read only
                         case CTRL_ADDR_GENERAL_STATUS:
@@ -95,6 +146,7 @@ static void i2c_slave_handler(i2c_inst_t *i2c, i2c_slave_event_t event)
                             break;
                         case CTRL_ADDR_INTRPT_CTRL:
                             sysvars.interrupt_ctrl = buffer;
+                            updateFlash = true;
                             break;
                         case CTRL_ADDR_NUM_THRESH_POT0:
                         case CTRL_ADDR_NUM_THRESH_POT1:
@@ -344,17 +396,17 @@ static void init_gpio(void)
     gpio_pull_up(SLAVE_SCL_PIN);
 
     gpio_set_irq_enabled_with_callback(STOMP_PIN, GPIO_IRQ_EDGE_RISE, true, &stomp_callback);
-
 }
 
 static void hw_init()
 {
+    //  Do flash things
+    read_config();
+    updateFlash=false;
     //  Initialize the sysvars structure
     sysvars.i2c_addr = I2C_SLAVE_BASE_ADDRESS;
     sysvars.fw_version = FIRMWARE_VERSION;
-    sysvars.sys_ctrl = 0;
     sysvars.sys_flags = 0;
-    sysvars.interrupt_ctrl = 0;
     sysvars.interrupt_status = 0;
     sysvars.interrupt_out = false;
     sysvars.clear_intr = false;
@@ -427,6 +479,15 @@ int main()
 
     while(1)
     {
+        if(updateFlash)
+        {
+            if(write_config())
+            {
+                //  log some kind of error for mismatch... for now do nothing
+            }
+            //  release the flag
+            updateFlash = false;
+        }
         //  Whenever the read timer passes, read all ADCs
         if(readAdcs)
         {
